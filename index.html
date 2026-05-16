@@ -66,20 +66,6 @@
             position: relative;
         }
         #game-container.hidden { opacity: 0; }
-        #debug-log {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            max-height: 200px;
-            overflow-y: auto;
-            background: rgba(0,0,0,0.8);
-            color: #0f0;
-            font-family: monospace;
-            font-size: 11px;
-            padding: 10px;
-            display: none;
-        }
     </style>
 </head>
 <body>
@@ -90,33 +76,25 @@
         <div class="bar-wrap"><div class="bar" id="load-bar"></div></div>
     </div>
     <div id="game-container" class="hidden"></div>
-    <div id="debug-log"></div>
 
     <script>
-        // Debug logger
-        window.dbg = {
-            el: null,
-            logs: [],
-            init: function() {
-                this.el = document.getElementById('debug-log');
-                // this.el.style.display = 'block'; // Uncomment to show debug
-            },
-            log: function(msg) {
-                var ts = new Date().toISOString().substr(11, 12);
-                var line = '[' + ts + '] ' + msg;
-                this.logs.push(line);
-                if (this.el) this.el.innerHTML = this.logs.slice(-50).join('<br>');
-                console.log('[DBG] ' + msg);
-            }
-        };
-        window.dbg.init();
+        var loadStatus = document.getElementById('load-status');
+        var loadBar = document.getElementById('load-bar');
+        var gameContainer = document.getElementById('game-container');
+        var loadingDiv = document.getElementById('loading');
 
-        // Service Worker registration
+        function setStatus(text, pct) {
+            loadStatus.textContent = text;
+            if (pct !== undefined) loadBar.style.width = pct + '%';
+            console.log('[Status] ' + text + (pct !== undefined ? ' (' + pct + '%)' : ''));
+        }
+
+        // Register Service Worker
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('./sw.js').then(function(reg) {
-                window.dbg.log('SW registered: ' + reg.scope);
+                console.log('[SW] Registered:', reg.scope);
             }).catch(function(err) {
-                window.dbg.log('SW failed: ' + err);
+                console.warn('[SW] Failed:', err);
             });
         }
 
@@ -149,48 +127,25 @@
             getTime: function() { return Math.floor(Date.now() / 1000).toString(); }
         };
 
-        var loadStatus = document.getElementById('load-status');
-        var loadBar = document.getElementById('load-bar');
-        var gameContainer = document.getElementById('game-container');
-        var loadingDiv = document.getElementById('loading');
-
-        function setStatus(text, pct) {
-            loadStatus.textContent = text;
-            if (pct !== undefined) loadBar.style.width = pct + '%';
-            window.dbg.log('Status: ' + text + (pct !== undefined ? ' (' + pct + '%)' : ''));
-        }
-
         setStatus('Loading Ruffle...', 5);
 
-        // Load Ruffle from CDN
-        window.dbg.log('Loading Ruffle from jsdelivr...');
+        // Load Ruffle
         var script = document.createElement('script');
         script.src = 'https://cdn.jsdelivr.net/npm/@ruffle-rs/ruffle@0.2.0-nightly.2026.5.14/ruffle.js';
         script.onload = function() {
-            window.dbg.log('Ruffle script loaded');
-            setStatus('Ruffle ready, initializing game...', 20);
+            console.log('[Ruffle] Script loaded');
+            setStatus('Ruffle ready, initializing...', 20);
             initGame();
         };
         script.onerror = function() {
-            window.dbg.log('jsdelivr failed, trying unpkg...');
-            setStatus('CDN failed, trying backup...', 5);
-            var s2 = document.createElement('script');
-            s2.src = 'https://unpkg.com/@ruffle-rs/ruffle@0.2.0-nightly.2026.5.14/ruffle.js';
-            s2.onload = function() { 
-                window.dbg.log('unpkg loaded');
-                initGame(); 
-            };
-            s2.onerror = function() { 
-                window.dbg.log('All CDN failed');
-                setStatus('Engine load failed', 0); 
-            };
-            document.head.appendChild(s2);
+            console.error('[Ruffle] Script load failed');
+            setStatus('Engine load failed', 0);
         };
         document.head.appendChild(script);
 
         function initGame() {
             try {
-                window.dbg.log('initGame called');
+                console.log('[Ruffle] Creating player...');
                 window.RufflePlayer = window.RufflePlayer || {};
                 window.RufflePlayer.config = {
                     "upgradeToHttps": false,
@@ -200,29 +155,36 @@
                     "openUrlMode": "allow",
                     "allowScriptAccess": true,
                     "backgroundColor": "#0a0a1a",
-                    "wmode": "direct"
+                    "publicPath": "./"
                 };
 
-                window.dbg.log('Creating Ruffle player...');
                 var ruffle = RufflePlayer.newest().createPlayer();
-                window.dbg.log('Player element created, appending to container...');
+                console.log('[Ruffle] Player element:', ruffle.tagName);
                 gameContainer.appendChild(ruffle);
                 
-                setStatus('Loading game resources...', 30);
+                setStatus('Loading game...', 30);
                 
-                // Check for canvas periodically
+                // Load SWF with Promise handling
+                var loadPromise = ruffle.load('./zmhj.swf');
+                console.log('[Ruffle] Load promise:', loadPromise);
+                
+                loadPromise.then(function() {
+                    console.log('[Ruffle] Load succeeded!');
+                    setStatus('Game loaded!', 100);
+                }).catch(function(err) {
+                    console.error('[Ruffle] Load failed:', err);
+                    setStatus('Load failed: ' + err, 0);
+                });
+                
+                // Monitor for canvas
                 var checkCount = 0;
                 var checkInterval = setInterval(function() {
                     checkCount++;
-                    window.dbg.log('Check #' + checkCount + ': Looking for canvas...');
-                    
-                    // Check shadow root
                     var shadow = ruffle.shadowRoot;
                     if (shadow) {
-                        window.dbg.log('Shadow root found');
                         var canvas = shadow.querySelector('canvas');
                         if (canvas) {
-                            window.dbg.log('Canvas FOUND! Game loaded successfully!');
+                            console.log('[Ruffle] Canvas found at check #' + checkCount);
                             clearInterval(checkInterval);
                             setStatus('Game loaded!', 100);
                             setTimeout(function() {
@@ -230,30 +192,23 @@
                                 gameContainer.classList.remove('hidden');
                                 setTimeout(function() { loadingDiv.style.display = 'none'; }, 500);
                             }, 1000);
+                        } else {
+                            console.log('[Check #' + checkCount + '] No canvas yet, shadow has ' + shadow.children.length + ' children');
                         }
                     }
-                    
-                    // Also check direct children
-                    var childCanvas = ruffle.querySelector('canvas');
-                    if (childCanvas) {
-                        window.dbg.log('Canvas found in direct children!');
-                    }
-                }, 3000);
+                }, 2000);
 
-                // Fallback: hide loading after 120 seconds
+                // Timeout
                 setTimeout(function() {
                     clearInterval(checkInterval);
-                    window.dbg.log('Timeout reached, showing game container');
+                    console.log('[Ruffle] Timeout reached');
                     loadingDiv.style.opacity = '0';
                     gameContainer.classList.remove('hidden');
                     setTimeout(function() { loadingDiv.style.display = 'none'; }, 500);
                 }, 120000);
 
-                window.dbg.log('Calling ruffle.load(./zmhj.swf)...');
-                ruffle.load('./zmhj.swf');
-
             } catch (e) {
-                window.dbg.log('ERROR: ' + e.message);
+                console.error('[Ruffle] Error:', e);
                 setStatus('Error: ' + e.message, 0);
             }
         }
